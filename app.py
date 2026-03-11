@@ -3,6 +3,8 @@ from streamlit.runtime.scriptrunner import add_script_run_ctx
 import threading
 import queue
 import time
+import io
+import base64
 import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
@@ -433,8 +435,15 @@ with col_chart:
                         ax.plot(best_idx, y_pos, marker='o', color='#F9E2AF', markersize=8, zorder=5)
         
         fig.tight_layout(pad=0.5)
-        st.pyplot(fig, width='stretch')
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor=fig.get_facecolor())
+        buf.seek(0)
+        img_b64 = base64.b64encode(buf.read()).decode()
         plt.close(fig)
+        st.markdown(
+            f'<img src="data:image/png;base64,{img_b64}" style="width:100%;border-radius:6px;"/>',
+            unsafe_allow_html=True
+        )
     else:
         st.info("Esperando velas...")
 

@@ -66,6 +66,7 @@ def start_bot():
         st.session_state.bot.monto_operacion = float(st.session_state.monto_val)
         st.session_state.bot.interval = st.session_state.interval_val
         st.session_state.bot.auto_trading = st.session_state.auto_trading
+        st.session_state.bot.current_asset = st.session_state.activo_val
         
         st.session_state.bot_thread = threading.Thread(target=st.session_state.bot.run_trading_loop, daemon=True)
         add_script_run_ctx(st.session_state.bot_thread)

@@ -739,6 +739,12 @@ class TradingBot:
                         except Exception as e:
                             self.info(f"Fallo crítico en ejecución: {e}")
                 
+                # Actualizar balance al final de cada ciclo
+                try:
+                    self._emit('balance', self.api.get_balance())
+                except:
+                    pass
+
                 # Pausa de ciclo dinámica
                 contador = int(max(1, self.interval))
                 while contador > 0 and self.running:

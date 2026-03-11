@@ -80,79 +80,98 @@ def stop_bot():
         st.session_state.is_running = False
 
 def process_queue():
-    while not _bot_queue.empty():
+    while True:
+        # Extraer el payload — separado del procesamiento para no perder items
         try:
             payload = _bot_queue.get_nowait()
+        except queue.Empty:
+            break
+
+        # Procesar con su propio try/except para que un error no detenga la cola
+        try:
             ptype = payload['type']
-            
+
             if ptype == 'status':
                 st.session_state.logs.append(payload.get('data', payload.get('msg', '')))
-            
+
             elif ptype == 'balance':
                 st.session_state.balance = payload['data']
-                
+
             elif ptype == 'countdown':
                 st.session_state.countdown = payload['data']
-                
+
             elif ptype == 'cooldown_remaining':
                 st.session_state.cooldown_remaining = payload['data']
-                
+
             elif ptype == 'auto_stopped':
                 reason = payload['data']
                 st.session_state.auto_trading = False
                 st.session_state.auto_stopped_reason = reason
                 st.session_state.logs.append(f"⛔ AUTO-TRADING DETENIDO: {reason}")
-                
+
             elif ptype == 'score_details':
                 st.session_state.score_details = payload['data']
-                
+
             elif ptype == 'assets':
-                st.session_state.assets = payload['data']
-                
+                open_assets = payload['data']
+                st.session_state.assets = open_assets
+                # Si el activo actual no está disponible, cambiar al primero
+                if st.session_state.activo_val not in open_assets and open_assets:
+                    st.session_state.activo_val = open_assets[0]
+
             elif ptype == 'metrics':
                 st.session_state.metrics = payload['data']
-                
+
             elif ptype == 'order':
                 d = payload['data']
                 oid = str(d['id'])
-                if oid not in st.session_state.orders:
+                if oid and oid != 'None' and oid not in st.session_state.orders:
                     st.session_state.logs.append(f"Nueva orden detectada: {oid}.")
-                    st.session_state.orders[oid] = {
-                        'ID': oid, 'Hora': d['time'], 'Dir': d['dir'], 
-                        'Inversión': f"${d['amount']}", 'Resultado': d['res'], 'Beneficio': f"${d['prof']:.2f}",
+                    # Reasignación explícita para que Streamlit detecte el cambio
+                    orders = dict(st.session_state.orders)
+                    orders[oid] = {
+                        'ID': oid, 'Hora': d['time'], 'Dir': d['dir'],
+                        'Inversión': f"${d['amount']}", 'Resultado': d['res'],
+                        'Beneficio': f"${d.get('prof', 0):.2f}",
                         'exp_at': d.get('exp_at', 0)
                     }
-                    st.session_state.trade_markers.append({
-                        'id': oid, 'timestamp': time.time(), 
-                        'dir': d['dir'], 'result': None, 'prof': 0
-                    })
-                    
+                    st.session_state.orders = orders
+                    markers = list(st.session_state.trade_markers)
+                    markers.append({'id': oid, 'timestamp': time.time(),
+                                    'dir': d['dir'], 'result': None, 'prof': 0})
+                    st.session_state.trade_markers = markers
+
             elif ptype == 'order_update':
                 d = payload['data']
                 oid = str(d['id'])
                 if oid in st.session_state.orders:
-                    st.session_state.orders[oid]['Resultado'] = d['res']
-                    st.session_state.orders[oid]['Beneficio'] = f"${d.get('prof', 0):.2f}"
-                    
-                    for m in st.session_state.trade_markers:
+                    orders = dict(st.session_state.orders)
+                    orders[oid] = dict(orders[oid])
+                    orders[oid]['Resultado'] = d['res']
+                    orders[oid]['Beneficio'] = f"${d.get('prof', 0):.2f}"
+                    st.session_state.orders = orders
+
+                    markers = list(st.session_state.trade_markers)
+                    for m in markers:
                         if m['id'] == oid:
                             m['result'] = d['res']
                             m['prof'] = d.get('prof', 0)
                             break
-                            
+                    st.session_state.trade_markers = markers
+
                     profit = d.get('prof', 0)
                     if d['res'] == 'WIN':
                         st.session_state.pnl_wins += 1
                     elif d['res'] == 'LOSS':
                         st.session_state.pnl_losses += 1
                     st.session_state.pnl_total += profit
-                    
-        except queue.Empty:
-            break
+
+        except Exception as e:
+            st.session_state.logs.append(f"[queue error] {type(e).__name__}: {e}")
 
     # Limitar logs
-    if len(st.session_state.logs) > 50:
-        st.session_state.logs = st.session_state.logs[-50:]
+    if len(st.session_state.logs) > 100:
+        st.session_state.logs = st.session_state.logs[-100:]
 
 process_queue()
 
@@ -185,9 +204,11 @@ with ctrl1:
     new_asset = st.selectbox("Divisa Técnica", assets, index=assets.index(st.session_state.activo_val))
     if new_asset != st.session_state.activo_val:
         st.session_state.activo_val = new_asset
+        st.session_state.trade_markers = []
+        st.session_state.metrics = None      # Limpiar gráfico del activo anterior
+        st.session_state.score_details = None
         if st.session_state.is_running and st.session_state.bot:
             threading.Thread(target=st.session_state.bot.set_asset, args=(new_asset,), daemon=True).start()
-        st.session_state.trade_markers = []
     
     monto = st.number_input("Monto Operación ($)", min_value=1.0, value=float(st.session_state.monto_val))
     if monto != st.session_state.monto_val:
@@ -328,7 +349,7 @@ with col_chart:
     d = st.session_state.metrics
     if d and d.get('vela_hist'):
         velas = d['vela_hist']
-        fig, ax = plt.subplots(figsize=(8, 4), dpi=100)
+        fig, ax = plt.subplots(figsize=(12, 4), dpi=100)
         fig.patch.set_facecolor('#1E1E2E')
         ax.set_facecolor('#181825')
         ax.tick_params(colors='#CDD6F4', labelsize=8)
@@ -399,7 +420,9 @@ with col_chart:
                     elif res is None:
                         ax.plot(best_idx, y_pos, marker='o', color='#F9E2AF', markersize=8, zorder=5)
         
-        st.pyplot(fig)
+        fig.tight_layout(pad=0.5)
+        st.pyplot(fig, use_container_width=True)
+        plt.close(fig)
     else:
         st.info("Esperando velas...")
 

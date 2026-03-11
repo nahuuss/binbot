@@ -8,8 +8,12 @@ import datetime
 import matplotlib.pyplot as plt
 from bot import TradingBot, ACTIVO, MONTO_OPERACION
 
-# Cola a nivel de módulo — accesible desde hilos sin ScriptRunContext
-_bot_queue: queue.Queue = queue.Queue()
+@st.cache_resource
+def _get_queue() -> queue.Queue:
+    """Cola persistente entre hot-reloads de Streamlit."""
+    return queue.Queue()
+
+_bot_queue = _get_queue()
 
 # Configuración de página
 st.set_page_config(page_title="Trading Bot Dashboard", layout="wide", page_icon="📈")
@@ -78,6 +82,12 @@ def stop_bot():
         st.session_state.bot.stop()
         st.session_state.logs.append("Se envió señal de detener. Esperando fin del ciclo...")
         st.session_state.is_running = False
+    # Drenar cola para no procesar eventos del bot anterior al reiniciar
+    while not _bot_queue.empty():
+        try:
+            _bot_queue.get_nowait()
+        except queue.Empty:
+            break
 
 def process_queue():
     while True:
@@ -260,89 +270,91 @@ with col_metrics:
     d = st.session_state.metrics
     sd = st.session_state.score_details
     
-    if d and sd:
-        st.markdown(f"**Precio:** {d.get('precio', '-')}")
+    if d:
         rsi = d.get('rsi', 50)
         rsi_color = "red" if rsi >= 70 else "green" if rsi <= 30 else "gray"
-        st.markdown(f"**RSI (14):** :{rsi_color}[{rsi:.2f}]")
-        st.markdown(f"**EMA(20):** {d.get('ema', '-'):.5f} | **SMA(50):** {d.get('sma', '-'):.5f}")
-        st.markdown(f"**BB Sup:** {d.get('bb_sup', '-'):.5f} | **BB Inf:** {d.get('bb_inf', '-'):.5f}")
-        
-        score = sd.get('total', 0)
-        score_color = "green" if score >= 0.2 else "red" if score <= -0.2 else "gray"
-        st.markdown(f"**Score:** :{score_color}[{score:+.2f}] (µM:{sd.get('micro_momentum',0):+.2f} T:{sd.get('tech',0):+.2f} M:{sd.get('mood_momentum',0):+.2f})")
-        
-        # Mood
-        mood_call = d.get('mood_call', 0.5)
-        st.progress(mood_call, text=f"Sentimiento: {int(mood_call*100)}% SUBE / {int((1-mood_call)*100)}% BAJA")
 
-        # === PANEL DE INTERPRETACIÓN ===
-        threshold = 0.20
-        cooldown_rem = st.session_state.cooldown_remaining
-        auto_on = st.session_state.auto_trading
+        # Métricas básicas — solo necesitan 'd'
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Precio", f"{d.get('precio', '-')}")
+            st.markdown(f"**RSI (14):** :{rsi_color}[{rsi:.2f}]")
+        with c2:
+            mood_call = d.get('mood_call', 0.5)
+            st.metric("Sentimiento SUBE", f"{int(mood_call*100)}%")
+            st.metric("Sentimiento BAJA", f"{int((1-mood_call)*100)}%")
 
-        if cooldown_rem > 0 and auto_on:
-            st.warning(f"⏳ Cooldown activo — próxima oportunidad en {cooldown_rem}s")
-        elif not auto_on:
-            st.caption("🔕 Auto-trading desactivado — solo manual")
-        elif score >= threshold:
-            st.success("✅ SEÑAL DE COMPRA (CALL ↑)")
-        elif score <= -threshold:
-            st.error("✅ SEÑAL DE VENTA (PUT ↓)")
-        elif score > 0:
-            st.info(f"🔍 Casi CALL — falta +{threshold - score:.2f} de score")
-        elif score < 0:
-            st.info(f"🔍 Casi PUT — falta -{threshold + score:.2f} de score")
-        else:
-            st.caption("⏸ Sin señal — mercado neutral")
+        st.caption(f"EMA(20): {d.get('ema',0):.5f}  |  SMA(50): {d.get('sma',0):.5f}")
+        st.caption(f"BB Sup: {d.get('bb_sup',0):.5f}  |  BB Inf: {d.get('bb_inf',0):.5f}")
+        st.progress(mood_call, text=f"Mood: {int(mood_call*100)}% SUBE / {int((1-mood_call)*100)}% BAJA")
 
-        # Factor dominante
-        factores = {
-            "Micro-momentum": sd.get('micro_momentum', 0),
-            "Técnicos": sd.get('tech', 0),
-            "Mom. sentimiento": sd.get('mood_momentum', 0),
-            "Divergencia": sd.get('divergence', 0),
-            "Sentimiento base": sd.get('mood_base', 0),
-            "ROC": sd.get('roc', 0),
-            "Contrarian": sd.get('fade_crowd', 0),
-        }
-        dom_nombre, dom_val = max(factores.items(), key=lambda x: abs(x[1]))
-        if abs(dom_val) >= 0.01:
-            dir_sym = "↑" if dom_val > 0 else "↓"
-            st.caption(f"{dir_sym} Factor dominante: **{dom_nombre}** ({dom_val:+.2f})")
+        if sd:
+            score = sd.get('total', 0)
+            score_color = "green" if score >= 0.2 else "red" if score <= -0.2 else "gray"
+            st.markdown(f"**Score:** :{score_color}[{score:+.2f}] (µM:{sd.get('micro_momentum',0):+.2f} T:{sd.get('tech',0):+.2f} M:{sd.get('mood_momentum',0):+.2f})")
 
-        # Coherencia
-        if sd.get('coherence', 0):
-            st.warning("⚠ MicroMom y MoodMom contradictorios → señales atenuadas")
+            # Panel de interpretación
+            threshold = 0.20
+            cooldown_rem = st.session_state.cooldown_remaining
+            auto_on = st.session_state.auto_trading
 
-        # Guía RSI
-        if rsi < 30:
-            st.caption("RSI en sobreventa (bueno para CALL)")
-        elif rsi > 70:
-            st.caption("RSI en sobrecompra (bueno para PUT)")
-        else:
-            dist_call = rsi - 30
-            dist_put = 70 - rsi
-            if dist_call < dist_put:
-                st.caption(f"RSI {rsi:.1f} — necesita bajar {dist_call:.1f}pts para sobreventa")
+            if cooldown_rem > 0 and auto_on:
+                st.warning(f"⏳ Cooldown activo — {cooldown_rem}s")
+            elif not auto_on:
+                st.caption("🔕 Auto-trading desactivado")
+            elif score >= threshold:
+                st.success("✅ SEÑAL CALL ↑")
+            elif score <= -threshold:
+                st.error("✅ SEÑAL PUT ↓")
+            elif score > 0:
+                st.info(f"🔍 Casi CALL — falta +{threshold - score:.2f}")
+            elif score < 0:
+                st.info(f"🔍 Casi PUT — falta -{threshold + score:.2f}")
             else:
-                st.caption(f"RSI {rsi:.1f} — necesita subir {dist_put:.1f}pts para sobrecompra")
+                st.caption("⏸ Sin señal — neutral")
 
-        # Condiciones
+            factores = {
+                "Micro-momentum": sd.get('micro_momentum', 0),
+                "Técnicos": sd.get('tech', 0),
+                "Mom. sentimiento": sd.get('mood_momentum', 0),
+                "Divergencia": sd.get('divergence', 0),
+                "Sentimiento base": sd.get('mood_base', 0),
+                "ROC": sd.get('roc', 0),
+                "Contrarian": sd.get('fade_crowd', 0),
+            }
+            dom_nombre, dom_val = max(factores.items(), key=lambda x: abs(x[1]))
+            if abs(dom_val) >= 0.01:
+                dir_sym = "↑" if dom_val > 0 else "↓"
+                st.caption(f"{dir_sym} Factor dominante: **{dom_nombre}** ({dom_val:+.2f})")
+            if sd.get('coherence', 0):
+                st.warning("⚠ MicroMom y MoodMom contradictorios")
+
+            if rsi < 30:
+                st.caption("RSI en sobreventa (CALL)")
+            elif rsi > 70:
+                st.caption("RSI en sobrecompra (PUT)")
+            else:
+                dist_call, dist_put = rsi - 30, 70 - rsi
+                if dist_call < dist_put:
+                    st.caption(f"RSI {rsi:.1f} — baja {dist_call:.0f}pts → sobreventa")
+                else:
+                    st.caption(f"RSI {rsi:.1f} — sube {dist_put:.0f}pts → sobrecompra")
+        else:
+            st.caption("⏳ Calculando score...")
+
         with st.expander("Condiciones detalladas"):
-            st.write("**Para PUT (Baja):**")
+            st.write("**PUT (Baja):**")
             st.checkbox("RSI >= 70", value=d.get('cond_put_rsi', False), disabled=True)
             st.checkbox("Toca BB Sup", value=d.get('cond_put_bb', False), disabled=True)
             st.checkbox("Tendencia Bajista", value=d.get('cond_put_tend', False), disabled=True)
-            st.checkbox("Sentimiento Bajista (Mood < 45%)", value=d.get('cond_put_mood', False), disabled=True)
-
-            st.write("**Para CALL (Alza):**")
+            st.checkbox("Mood < 45%", value=d.get('cond_put_mood', False), disabled=True)
+            st.write("**CALL (Alza):**")
             st.checkbox("RSI <= 30", value=d.get('cond_call_rsi', False), disabled=True)
             st.checkbox("Toca BB Inf", value=d.get('cond_call_bb', False), disabled=True)
             st.checkbox("Tendencia Alcista", value=d.get('cond_call_tend', False), disabled=True)
-            st.checkbox("Sentimiento Alcista (Mood > 55%)", value=d.get('cond_call_mood', False), disabled=True)
+            st.checkbox("Mood > 55%", value=d.get('cond_call_mood', False), disabled=True)
     else:
-        st.info("Esperando datos...")
+        st.info("Esperando datos del bot...")
 
 with col_chart:
     st.subheader("Gráfico de Mercado")
@@ -421,7 +433,7 @@ with col_chart:
                         ax.plot(best_idx, y_pos, marker='o', color='#F9E2AF', markersize=8, zorder=5)
         
         fig.tight_layout(pad=0.5)
-        st.pyplot(fig, use_container_width=True)
+        st.pyplot(fig, width='stretch')
         plt.close(fig)
     else:
         st.info("Esperando velas...")
@@ -432,7 +444,8 @@ col_logs, col_orders = st.columns(2)
 
 with col_logs:
     st.subheader("Logs del Sistema")
-    st.text_area("Logs", value="\n".join(st.session_state.logs), height=200, disabled=True, label_visibility="collapsed")
+    # Logs más recientes primero para verlos sin scrollear
+    st.text_area("Logs", value="\n".join(reversed(st.session_state.logs[-40:])), height=200, disabled=True, label_visibility="collapsed")
 
 with col_orders:
     st.subheader("Historial de Órdenes")
@@ -455,7 +468,7 @@ with col_orders:
             df['Resultado'] = df.apply(format_exp, axis=1)
             df = df.drop(columns=['exp_at'])
             
-        st.dataframe(df.iloc[::-1], use_container_width=True, hide_index=True)
+        st.dataframe(df.iloc[::-1], width='stretch', hide_index=True)
     else:
         st.info("No hay órdenes registradas todavía.")
 

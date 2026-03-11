@@ -73,6 +73,7 @@ class TradingBot:
         self.interval = 6
         self.forced_trade_direction = None
         self.current_asset = ACTIVO
+        self._mood_asset_key = ACTIVO  # updated in run_trading_loop / set_asset
         self.monto_operacion = MONTO_OPERACION
         self.last_trade_time = 0
         self.auto_trading = False
@@ -370,13 +371,17 @@ class TradingBot:
 
     def set_asset(self, new_asset):
         """Permite cambiar el par de divisas al vuelo desde la UI."""
+        # Resolve mood key: "AIG-OTC" -> "AIG" for ACTIVES lookup
+        from iqoptionapi.constants import ACTIVES as _ACTIVES
+        new_mood_key = new_asset if new_asset in _ACTIVES else (new_asset[:-4] if new_asset.endswith('-OTC') and new_asset[:-4] in _ACTIVES else new_asset)
         if self.api and self.api.check_connect():
             try:
-                self.api.stop_mood_stream(self.current_asset, "turbo-option")
-                self.api.start_mood_stream(new_asset, "turbo-option")
+                self.api.stop_mood_stream(getattr(self, '_mood_asset_key', self.current_asset), "turbo-option")
+                self.api.start_mood_stream(new_mood_key, "turbo-option")
             except:
                 pass
         self.current_asset = new_asset
+        self._mood_asset_key = new_mood_key
         self.info(f"Cambiado activo a analizar: {self.current_asset}")
 
     def _emit(self, event_type, data):
@@ -601,8 +606,14 @@ class TradingBot:
         self.running = True
 
         # Iniciar stream de mood inicial
+        # Stock OTC assets like "AIG-OTC" are registered as "AIG" in ACTIVES dict
+        from iqoptionapi.constants import ACTIVES as _ACTIVES
+        _mood_asset = self.current_asset
+        if _mood_asset not in _ACTIVES and _mood_asset.endswith('-OTC') and _mood_asset[:-4] in _ACTIVES:
+            _mood_asset = _mood_asset[:-4]
+        self._mood_asset_key = _mood_asset
         try:
-            self.api.start_mood_stream(self.current_asset, "turbo-option")
+            self.api.start_mood_stream(_mood_asset, "turbo-option")
         except:
             pass
 
@@ -629,10 +640,12 @@ class TradingBot:
                 bb_sup, bb_med, bb_inf = calcular_bollinger(precios_cierre, periodos=PERIODO_BOLLINGER, desviaciones=DESVIACION_BOLLINGER)
                 
                 # Fetch Traders Mood (Porcentaje de opciones CALL/Sube)
+                # Use _mood_asset_key: stock OTCs like "AIG-OTC" are registered as "AIG" in ACTIVES
                 mood_call = 0.5
                 try:
-                    mood_raw = self.api.get_traders_mood(self.current_asset)
-                    if mood_raw: mood_call = mood_raw
+                    mood_raw = self.api.get_traders_mood(self._mood_asset_key)
+                    if mood_raw is not None:
+                        mood_call = float(mood_raw)
                 except:
                     pass
                 

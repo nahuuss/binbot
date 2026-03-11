@@ -1,3 +1,2 @@
-[2026-03-11 02:00:13] === NUEVA SESION INICIADA ===
-[2026-03-11 02:00:40] Asset=AIG-OTC | Precio=70141.96500 | RSI=61.98 | EMA=70094.17064 | SMA=70031.41118 | BB_W%=0.4704 | Mood_CALL=50% | Mood_PUT=50% | Score=-0.040 | MoodMom=0.000 | MicroMom=0.000 | Diverg=0.000 | MoodBase=0.000 | Tech=-0.200 | ROC=0.000 | FadeCrowd=0.000 | Decision=HOLD | Filtros=[NONE]
-[2026-03-11 02:00:47] Asset=AIG-OTC | Precio=75.08150 | RSI=57.05 | EMA=75.00445 | SMA=74.93441 | BB_W%=0.6843 | Mood_CALL=50% | Mood_PUT=50% | Score=-0.187 | MoodMom=0.000 | MicroMom=-0.667 | Diverg=0.000 | MoodBase=0.000 | Tech=-0.200 | ROC=0.000 | FadeCrowd=0.000 | Decision=HOLD | Filtros=[NONE]
+[2026-03-11 02:19:10] === NUEVA SESION INICIADA ===
+[2026-03-11 02:19:31] Asset=AIG-OTC | Precio=69960.92500 | RSI=38.01 | EMA=70033.82703 | SMA=70076.87029 | BB_W%=0.3448 | Mood_CALL=0% | Mood_PUT=100% | Score=0.140 | MoodMom=0.000 | MicroMom=0.000 | Diverg=0.000 | MoodBase=-1.000 | Tech=0.200 | ROC=0.000 | FadeCrowd=1.000 | Decision=HOLD | Filtros=[NONE]

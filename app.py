@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 import threading
 import queue
 import time
@@ -6,6 +7,10 @@ import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
 from bot import TradingBot, ACTIVO, MONTO_OPERACION
+
+# Cola global para evitar problemas de session_state missing en hilos
+if 'global_q' not in st.session_state:
+    st.session_state.global_q = queue.Queue()
 
 # Configuración de página
 st.set_page_config(page_title="Trading Bot Dashboard", layout="wide", page_icon="📈")
@@ -23,7 +28,6 @@ st.markdown("""
 # Inicialización del estado de la sesión
 def init_state():
     defaults = {
-        'q': queue.Queue(),
         'bot': None,
         'bot_thread': None,
         'is_running': False,
@@ -53,7 +57,8 @@ def init_state():
 init_state()
 
 def bot_callback(payload):
-    st.session_state.q.put(payload)
+    # Usar la cola directamente para saltar problemas de hilos
+    st.session_state.global_q.put(payload)
 
 def start_bot():
     if not st.session_state.is_running:
@@ -64,6 +69,7 @@ def start_bot():
         st.session_state.bot.auto_trading = st.session_state.auto_trading
         
         st.session_state.bot_thread = threading.Thread(target=st.session_state.bot.run_trading_loop, daemon=True)
+        add_script_run_ctx(st.session_state.bot_thread)
         st.session_state.bot_thread.start()
         st.session_state.is_running = True
 
@@ -74,9 +80,9 @@ def stop_bot():
         st.session_state.is_running = False
 
 def process_queue():
-    while not st.session_state.q.empty():
+    while not st.session_state.global_q.empty():
         try:
-            payload = st.session_state.q.get_nowait()
+            payload = st.session_state.global_q.get_nowait()
             ptype = payload['type']
             
             if ptype == 'status':
@@ -317,7 +323,7 @@ col_logs, col_orders = st.columns(2)
 
 with col_logs:
     st.subheader("Logs del Sistema")
-    st.text_area("", value="\n".join(st.session_state.logs), height=200, disabled=True)
+    st.text_area("Logs", value="\n".join(st.session_state.logs), height=200, disabled=True, label_visibility="collapsed")
 
 with col_orders:
     st.subheader("Historial de Órdenes")

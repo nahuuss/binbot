@@ -8,9 +8,8 @@ import datetime
 import matplotlib.pyplot as plt
 from bot import TradingBot, ACTIVO, MONTO_OPERACION
 
-# Cola global para evitar problemas de session_state missing en hilos
-if 'global_q' not in st.session_state:
-    st.session_state.global_q = queue.Queue()
+# Cola a nivel de módulo — accesible desde hilos sin ScriptRunContext
+_bot_queue: queue.Queue = queue.Queue()
 
 # Configuración de página
 st.set_page_config(page_title="Trading Bot Dashboard", layout="wide", page_icon="📈")
@@ -57,8 +56,8 @@ def init_state():
 init_state()
 
 def bot_callback(payload):
-    # Usar la cola directamente para saltar problemas de hilos
-    st.session_state.global_q.put(payload)
+    # Cola módulo-nivel: funciona desde hilos sin ScriptRunContext
+    _bot_queue.put(payload)
 
 def start_bot():
     if not st.session_state.is_running:
@@ -80,9 +79,9 @@ def stop_bot():
         st.session_state.is_running = False
 
 def process_queue():
-    while not st.session_state.global_q.empty():
+    while not _bot_queue.empty():
         try:
-            payload = st.session_state.global_q.get_nowait()
+            payload = _bot_queue.get_nowait()
             ptype = payload['type']
             
             if ptype == 'status':
@@ -211,11 +210,18 @@ with ctrl2:
 
 with ctrl3:
     st.write(f"⏱ Próximo análisis en: {st.session_state.countdown}s")
-    if st.session_state.cooldown_remaining > 0:
-        st.warning(f"🔒 Cooldown: {st.session_state.cooldown_remaining}s")
-    
+
+    # Estado unificado de auto-trading
     if st.session_state.auto_stopped_reason:
-        st.error(st.session_state.auto_stopped_reason)
+        st.error(f"⛔ {st.session_state.auto_stopped_reason} — Auto-trading detenido")
+    elif st.session_state.auto_trading:
+        rem = st.session_state.cooldown_remaining
+        if rem > 0:
+            st.warning(f"🔒 Cooldown: {rem}s (esperando para operar)")
+        else:
+            st.success("✅ Auto-trade listo para operar")
+    else:
+        st.caption("🔕 Auto-trading desactivado")
 
     if not st.session_state.is_running:
         st.button("INICIAR BOT", type="primary", on_click=start_bot, use_container_width=True)
@@ -247,18 +253,72 @@ with col_metrics:
         # Mood
         mood_call = d.get('mood_call', 0.5)
         st.progress(mood_call, text=f"Sentimiento: {int(mood_call*100)}% SUBE / {int((1-mood_call)*100)}% BAJA")
-        
+
+        # === PANEL DE INTERPRETACIÓN ===
+        threshold = 0.20
+        cooldown_rem = st.session_state.cooldown_remaining
+        auto_on = st.session_state.auto_trading
+
+        if cooldown_rem > 0 and auto_on:
+            st.warning(f"⏳ Cooldown activo — próxima oportunidad en {cooldown_rem}s")
+        elif not auto_on:
+            st.caption("🔕 Auto-trading desactivado — solo manual")
+        elif score >= threshold:
+            st.success("✅ SEÑAL DE COMPRA (CALL ↑)")
+        elif score <= -threshold:
+            st.error("✅ SEÑAL DE VENTA (PUT ↓)")
+        elif score > 0:
+            st.info(f"🔍 Casi CALL — falta +{threshold - score:.2f} de score")
+        elif score < 0:
+            st.info(f"🔍 Casi PUT — falta -{threshold + score:.2f} de score")
+        else:
+            st.caption("⏸ Sin señal — mercado neutral")
+
+        # Factor dominante
+        factores = {
+            "Micro-momentum": sd.get('micro_momentum', 0),
+            "Técnicos": sd.get('tech', 0),
+            "Mom. sentimiento": sd.get('mood_momentum', 0),
+            "Divergencia": sd.get('divergence', 0),
+            "Sentimiento base": sd.get('mood_base', 0),
+            "ROC": sd.get('roc', 0),
+            "Contrarian": sd.get('fade_crowd', 0),
+        }
+        dom_nombre, dom_val = max(factores.items(), key=lambda x: abs(x[1]))
+        if abs(dom_val) >= 0.01:
+            dir_sym = "↑" if dom_val > 0 else "↓"
+            st.caption(f"{dir_sym} Factor dominante: **{dom_nombre}** ({dom_val:+.2f})")
+
+        # Coherencia
+        if sd.get('coherence', 0):
+            st.warning("⚠ MicroMom y MoodMom contradictorios → señales atenuadas")
+
+        # Guía RSI
+        if rsi < 30:
+            st.caption("RSI en sobreventa (bueno para CALL)")
+        elif rsi > 70:
+            st.caption("RSI en sobrecompra (bueno para PUT)")
+        else:
+            dist_call = rsi - 30
+            dist_put = 70 - rsi
+            if dist_call < dist_put:
+                st.caption(f"RSI {rsi:.1f} — necesita bajar {dist_call:.1f}pts para sobreventa")
+            else:
+                st.caption(f"RSI {rsi:.1f} — necesita subir {dist_put:.1f}pts para sobrecompra")
+
         # Condiciones
         with st.expander("Condiciones detalladas"):
             st.write("**Para PUT (Baja):**")
             st.checkbox("RSI >= 70", value=d.get('cond_put_rsi', False), disabled=True)
             st.checkbox("Toca BB Sup", value=d.get('cond_put_bb', False), disabled=True)
             st.checkbox("Tendencia Bajista", value=d.get('cond_put_tend', False), disabled=True)
-            
+            st.checkbox("Sentimiento Bajista (Mood < 45%)", value=d.get('cond_put_mood', False), disabled=True)
+
             st.write("**Para CALL (Alza):**")
             st.checkbox("RSI <= 30", value=d.get('cond_call_rsi', False), disabled=True)
             st.checkbox("Toca BB Inf", value=d.get('cond_call_bb', False), disabled=True)
             st.checkbox("Tendencia Alcista", value=d.get('cond_call_tend', False), disabled=True)
+            st.checkbox("Sentimiento Alcista (Mood > 55%)", value=d.get('cond_call_mood', False), disabled=True)
     else:
         st.info("Esperando datos...")
 
@@ -281,13 +341,30 @@ with col_chart:
         lows = [v['min'] for v in velas]
         
         colors = ['#A6E3A1' if c >= o else '#F38BA8' for c, o in zip(closes, opens)]
-        
-        ax.vlines(x_idx, lows, highs, color=colors, linewidth=1)
-        
+
+        ax.vlines(x_idx, lows, highs, color=colors, linewidth=0.8)
+
         heights = [abs(c - o) for c, o in zip(closes, opens)]
         bottoms = [min(c, o) for c, o in zip(closes, opens)]
         heights = [h if h > 0 else 0.0001 for h in heights]
         ax.bar(x_idx, heights, bottom=bottoms, color=colors, width=0.7)
+
+        # Etiquetas de tiempo en eje X (igual que gui.py)
+        tick_positions = []
+        tick_labels = []
+        step = max(1, len(velas) // 6)
+        for i in range(0, len(velas), step):
+            ts = velas[i].get('from', 0)
+            if ts:
+                tick_positions.append(i)
+                tick_labels.append(datetime.datetime.fromtimestamp(ts).strftime('%H:%M:%S'))
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(tick_labels, rotation=30, ha='right', fontsize=7, color='#CDD6F4')
+
+        # Padding Y
+        min_p, max_p = min(lows), max(highs)
+        margen = (max_p - min_p) * 0.1 if max_p > min_p else 0.01
+        ax.set_ylim(min_p - margen, max_p + margen)
         
         # Marcadores
         if st.session_state.trade_markers:
@@ -308,8 +385,16 @@ with col_chart:
                     res = marker.get('result')
                     if res == 'WIN':
                         ax.plot(best_idx, y_pos, marker='^', color='#A6E3A1', markersize=10, zorder=5)
+                        ax.annotate(f"+${marker['prof']:.2f}", (best_idx, y_pos),
+                            textcoords="offset points", xytext=(0, 14),
+                            fontsize=6, color='#A6E3A1', ha='center', fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.2', fc='#1E1E2E', ec='#A6E3A1', alpha=0.8))
                     elif res == 'LOSS':
                         ax.plot(best_idx, y_pos, marker='v', color='#F38BA8', markersize=10, zorder=5)
+                        ax.annotate(f"-${abs(marker['prof']):.2f}", (best_idx, y_pos),
+                            textcoords="offset points", xytext=(0, -14),
+                            fontsize=6, color='#F38BA8', ha='center', fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.2', fc='#1E1E2E', ec='#F38BA8', alpha=0.8))
                     elif res is None:
                         ax.plot(best_idx, y_pos, marker='o', color='#F9E2AF', markersize=8, zorder=5)
         

@@ -392,17 +392,17 @@ class TradingBot:
         self.running = False
         self.info("Deteniendo el bot...")
 
-    def _wait_for_result(self, order_id, is_digital=False, timeout=180, trade_ctx=None):
+    def _wait_for_result(self, order_id, is_digital=False, timeout=180, trade_ctx=None, exp_at=None):
         """Hilo independiente para monitorear el resultado de una orden."""
         self.info(f"Iniciando seguimiento de orden {order_id}...")
         start = time.time()
-        
+
         def _process_result(beneficio, res_str):
             """Procesa resultado: martingala + CSV + UI update."""
             self._emit('order_update', {'id': order_id, 'res': res_str, 'prof': beneficio})
             balance = self.api.get_balance()
             self._emit('balance', balance)
-            
+
             # Martingala: resetear en WIN, incrementar en LOSS
             if res_str == 'WIN' or res_str == 'TIE':
                 self.consecutive_losses = 0
@@ -411,14 +411,46 @@ class TradingBot:
                 if self.consecutive_losses > self.martingala_max_steps:
                     self.info(f"⚠ Martingala: máximo de {self.martingala_max_steps} pasos alcanzado. Reseteando.")
                     self.consecutive_losses = 0
-            
+
             # Guardar en CSV
             if trade_ctx:
                 self._save_trade_csv(
                     trade_ctx['asset'], trade_ctx['dir'], trade_ctx['amount'],
                     res_str, beneficio, balance, trade_ctx.get('mood', 0), trade_ctx.get('rsi', 50)
                 )
-        
+
+        def _try_position_history():
+            """Fallback REST: busca el resultado en historial de posiciones."""
+            try:
+                for opt_type in ("binary-option", "turbo-option"):
+                    try:
+                        positions = self.api.get_position_history_v2(opt_type, 10)
+                        if not positions:
+                            continue
+                        items = positions.get('positions') or positions.get('items') or []
+                        for pos in items:
+                            pos_id = pos.get('raw_event', {}).get('option_id') or pos.get('id')
+                            if str(pos_id) == str(order_id):
+                                win_raw = pos.get('win', '')
+                                profit = float(pos.get('profit', 0) or 0)
+                                if win_raw == 'equal' or profit == 0:
+                                    beneficio = 0
+                                    res_str = 'TIE'
+                                elif win_raw in ('win',) or profit > 0:
+                                    beneficio = profit
+                                    res_str = 'WIN'
+                                else:
+                                    amount = float(pos.get('amount', 0) or 0)
+                                    beneficio = -amount if amount else profit
+                                    res_str = 'LOSS'
+                                self.info(f"[history] Resultado de Orden {order_id}: {res_str} (${beneficio:.2f})")
+                                return beneficio, res_str
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return None, None
+
         try:
             if is_digital:
                 while time.time() - start < timeout:
@@ -434,7 +466,10 @@ class TradingBot:
                         pass
                     time.sleep(1)
             else:
+                history_checked_at = None  # timestamp of last history check
                 while time.time() - start < timeout:
+                    now = time.time()
+                    # Primary: websocket event
                     try:
                         if self.api.api.socket_option_closed.get(order_id) is not None:
                             x = self.api.api.socket_option_closed[order_id]
@@ -445,14 +480,29 @@ class TradingBot:
                                 beneficio = float(x['msg']['sum']) * -1
                             else:
                                 beneficio = float(x['msg']['win_amount']) - float(x['msg']['sum'])
-                            
                             res_str = "WIN" if beneficio > 0 else "LOSS" if beneficio < 0 else "TIE"
                             self.info(f"Resultado de Orden {order_id}: {res_str} (${beneficio:.2f})")
                             _process_result(beneficio, res_str)
                             return
                     except Exception:
                         pass
+
+                    # Fallback REST: start polling 8s after expiry, every 15s
+                    if exp_at is not None and now >= exp_at + 8:
+                        if history_checked_at is None or now - history_checked_at >= 15:
+                            history_checked_at = now
+                            beneficio, res_str = _try_position_history()
+                            if res_str is not None:
+                                _process_result(beneficio, res_str)
+                                return
+
                     time.sleep(1)
+
+                # Last-chance history check before reporting TIMEOUT
+                beneficio, res_str = _try_position_history()
+                if res_str is not None:
+                    _process_result(beneficio, res_str)
+                    return
 
             self.info(f"Timeout esperando resultado de orden {order_id}.")
             self._emit('order_update', {'id': order_id, 'res': 'TIMEOUT', 'prof': 0})
@@ -725,9 +775,9 @@ class TradingBot:
                                 }
                                 
                                 threading.Thread(
-                                    target=self._wait_for_result, 
+                                    target=self._wait_for_result,
                                     args=(id_orden, is_digital),
-                                    kwargs={'trade_ctx': trade_ctx},
+                                    kwargs={'trade_ctx': trade_ctx, 'exp_at': exp_timestamp},
                                     daemon=True
                                 ).start()
                                 

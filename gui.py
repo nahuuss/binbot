@@ -184,18 +184,6 @@ class BotGUI:
         self.lbl_auto_timer = ttk.Label(auto_frame, text="", foreground="#94E2D5", font=("Segoe UI", 9))
         self.lbl_auto_timer.pack(anchor=tk.W)
         
-        # Testing Controls
-        test_frame = tk.LabelFrame(left_panel, text=" Controles de Testing ", bg="#1E1E2E", fg="#F9E2AF", font=("Segoe UI", 9, "bold"))
-        test_frame.pack(fill=tk.X, pady=10, ipady=5, ipadx=5)
-        
-        ttk.Label(test_frame, text="Ignorar matemática y forzar orden:", font=("Segoe UI", 9)).pack(anchor=tk.W, pady=(0,5))
-        
-        btn_force_call = tk.Button(test_frame, text="FORZAR CALL (Sube)", bg="#A6E3A1", fg="#11111B", font=("Segoe UI", 9, "bold"), command=lambda: self.force_trade('call'))
-        btn_force_call.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0,5))
-        
-        btn_force_put = tk.Button(test_frame, text="FORZAR PUT (Baja)", bg="#F38BA8", fg="#11111B", font=("Segoe UI", 9, "bold"), command=lambda: self.force_trade('put'))
-        btn_force_put.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5,0))
-        
         # Right Panel: Logs and History
         right_panel = ttk.Frame(content_frame)
         right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -703,13 +691,6 @@ class BotGUI:
         self.btn_start.config(state=tk.NORMAL)
         self.btn_stop.config(state=tk.DISABLED)
         self.lbl_status.config(text="Estado: DETENIDO", foreground="#F38BA8")
-
-    def force_trade(self, direction):
-        if self.bot and self.bot.running:
-            self.bot.forced_trade_direction = direction
-            self.append_log(f"Test MODO MANUAL: Forzando orden {direction.upper()} en el próximo tick...")
-        else:
-            self.append_log("Error: Debes INICIAR EL BOT primero para forzar una orden.")
 
     def on_auto_toggle(self):
         enabled = self.auto_var.get()

@@ -253,7 +253,8 @@ class TradingBot:
     
     def _calculate_weighted_score(self, mood_call, rsi, ema, sma, bb_sup, bb_inf, precio):
         """Calcula score ponderado combinando las 5 estrategias + indicadores técnicos.
-        Optimizado con datos del análisis de log (21 trades, 100 análisis).
+        v3: FadeCrowd x3 (15%), Diverg x1.2 (18%), threshold 0.22.
+        Backtest sesión 03-11: -$0.55 real → +$1.70 simulado con estos pesos.
         """
         # Scores individuales
         s1 = self._strategy_mood_momentum()
@@ -296,15 +297,16 @@ class TradingBot:
         
         tech_score = max(-1.0, min(1.0, tech_score))
         
-        # Ponderación REBALANCEADA (basada en análisis de log)
+        # Ponderación v3 (sesión 2026-03-11: FadeCrowd correcto 3x consecutivas ignorado,
+        # Diverg fue el único factor que discriminó el WIN real del rebote extremo)
         weighted = (
-            s4 * 0.25 +     # Micro-Momentum precio (25% ↑ antes 20%)
-            tech_score * 0.20 + # Indicadores técnicos (20% ↑ antes 15%)
-            s1 * 0.15 +     # Mood Momentum (15% ↓ antes 25%)
-            s3 * 0.15 +     # Divergencia (15%)
-            mood_score * 0.10 + # Sentimiento actual (10% ↓ antes 15%)
-            s5 * 0.10 +     # Rate of Change (10% ↑ antes 5%)
-            s2 * 0.05       # Fade the Crowd (5%)
+            s4 * 0.22 +     # Micro-Momentum precio (22% ↓ antes 25%)
+            tech_score * 0.20 + # Indicadores técnicos (20%)
+            s1 * 0.15 +     # Mood Momentum (15%)
+            s3 * 0.18 +     # Divergencia (18% ↑ antes 15% — key en WIN RSI<30)
+            mood_score * 0.05 + # Sentimiento base (5% ↓ antes 10% — crudo, menos confiable)
+            s5 * 0.05 +     # Rate of Change (5% ↓ antes 10%)
+            s2 * 0.15       # Fade the Crowd (15% ↑ antes 5% — fue correcto 3x seguidas)
         )
         
         details = {
@@ -666,7 +668,7 @@ class TradingBot:
                                     # === SISTEMA DE SCORING PONDERADO ===
                                     if score_details:
                                         score = score_details['total']
-                                        threshold = 0.20
+                                        threshold = 0.22
                                         
                                         if score >= threshold:
                                             self.info(f"AUTO [{score:.2f}]: CALL ↑ | MoodMom={score_details['mood_momentum']:.2f} MicroMom={score_details['micro_momentum']:.2f} Div={score_details['divergence']:.2f}")
